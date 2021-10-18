@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  fastapi:
+    build:
+      context: api/
+      dockerfile: Dockerfile
+    command: sh -c "gunicorn main:app --timeout 6000 --bind 0.0.0.0:5000 -w 1 -k uvicorn.workers.UvicornWorker"
+    ports:
+      - "5000:5000"
+    volumes:
+      - "/data/proj/pubtator/2021-05-16/:/data"
+  node:
+    build:
+      context: node/
+      dockerfile: Dockerfile
+        #command: "npm start"
+    command: "yarn start"
+    user: "node"
+    working_dir: /home/node/app
+    ports:
+      - "81:81"
