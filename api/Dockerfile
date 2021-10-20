@@ -19,4 +19,3 @@ RUN pip install -r requirements.txt
 
 # add main api code
 ADD ./app /app
-ADD ./annot /app/annot

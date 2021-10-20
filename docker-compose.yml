@@ -6,10 +6,12 @@ services:
       context: api/
       dockerfile: Dockerfile
     command: sh -c "gunicorn main:app --timeout 6000 --bind 0.0.0.0:5000 -w 1 -k uvicorn.workers.UvicornWorker"
+    environment:
+      - "PYTHONUNBUFFERED=1"
     ports:
       - "5000:5000"
     volumes:
-      - "/data/proj/pubtator/2021-05-16/:/data"
+      - "/data/proj/pubtator/2021-09-16/:/data"
   node:
     build:
       context: node/

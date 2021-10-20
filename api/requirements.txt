@@ -1,3 +1,4 @@
 ipython
 pandas
 scikit-learn
+biothings_client

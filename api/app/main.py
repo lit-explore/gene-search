@@ -12,6 +12,7 @@ import json
 import numpy as np
 import pandas as pd
 import urllib.request
+from biothings_client import get_client
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.cluster import KMeans
@@ -31,56 +32,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# gene id mapping (entrez/symbol)
-entrez_infile = "/app/annot/entrez_gene_mapping.tsv"
-gene_id_mapping = pd.read_csv(entrez_infile, sep="\t")
-
 # gene -> pubmed id dataset (entrez/pmids)
 gene_pmid_infile = "/data/pmids/gene-pmids.json"
 
-fp = open(gene_pmid_infile)
-gene_pmids = json.loads(fp.read())
-fp.close()
+with open(gene_pmid_infile) as fp:
+    gene_pmids = json.loads(fp.read())
+
+#  fp = open(gene_pmid_infile)
+#  gene_pmids = json.loads(fp.read())
+#  fp.close()
 
 
-def symbols_to_entrez(symbols):
-    """
-    Map input gene symbols to Entrez identifiers used in the Pubtator dataset
-    """
-    target_entrez = (
-        gene_id_mapping.reset_index().set_index("symbol").loc[symbols, "entrez"].values
-    )
-    target_entrez = [str(x) for x in target_entrez]
-
-    return target_entrez
-
-
-def get_gene_pmid_mat(target_symbols):
+def get_gene_pmid_mat(symbols):
     """Generates an <article x gene> matrix for genes of interest"""
+    # convert gene symbols to entrez ids used in pubtator dataset
+    mg = get_client("gene")
 
-    # get entrez ids associated with the gene symbols
-    target_entrez = symbols_to_entrez(target_symbols)
+    mapping = mg.querymany(
+        symbols, scopes="symbol", species=9606, fields="entrezgene", as_dataframe=True
+    )
+    mapping = mapping[~mapping.entrezgene.isna()]
+
+    # check for any genes that could not be mapped and remove them..
+    symbols = pd.Series(symbols)
+
+    mask = symbols.isin(mapping.index)
+
+    if mask.sum() < symbols.shape[0]:
+        # missing = symbols[~mask].tolist()
+        symbols = symbols[mask]
+
+    target_entrez = mapping.loc[symbols].entrezgene.values
+
+    # exclude any genes with no associated entrez id in the gene/pmid data
+    target_entrez = [x for x in target_entrez if x in gene_pmids]
 
     # subset pmids to get only genes of interest
     dat = {key: gene_pmids[key] for key in target_entrez}
 
-    # convert to a <pmid x gene> matrix
+    # get a list of all pubmed ids associated with at least one of the genes
     all_pmids = sorted(set(sum([dat[key] for key in dat], [])))
 
     print(
         f"Found {len(all_pmids)} articles with one or more of the genes of interest.."
     )
 
+    # convert to a <pmid x gene> matrix
     res: dict[str, list] = {}
 
     for gene in target_entrez:
         res[gene] = []
 
+        print(gene)
+
         for pmid in all_pmids:
             res[gene].append(pmid in dat[gene])
 
     dat = pd.DataFrame.from_dict(res)
-    dat.columns = target_symbols
+    dat.columns = symbols
     dat.index = all_pmids
 
     return dat
@@ -158,13 +167,6 @@ async def query(genes: str, limit: int = 100):
     # split list of genes
     target_symbols = genes.split(",")
 
-    # exclude genes which aren't in mapping
-    for gene_symbol in target_symbols:
-        if gene_symbol not in gene_id_mapping.symbol.values:
-            print(f"Unable to map gene: {gene_symbol}; excluding from analysis...")
-
-    target_symbols = [x for x in target_symbols if x in gene_id_mapping.symbol.values]
-
     # get <pmid x gene> matrix
     dat = get_gene_pmid_mat(target_symbols)
 
@@ -202,6 +204,7 @@ async def query(genes: str, limit: int = 100):
         "#83c0f3",
         "#c79cd8",
         "#cb7ffa",
+        "#ea3e8b",
         "#e67da1",
         "#fa8e7f",
         "#f2e283",

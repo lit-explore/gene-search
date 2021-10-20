@@ -79,7 +79,7 @@ function App() {
           <Form onSubmit={handleSubmit}>
             <Form.Label>Gene Symbols (comma- or newline-separated)</Form.Label>
             <Form.Control id="gene-input" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
-            <Form.Select id="article-limit" aria-label="Article Limit">
+            <Form.Select id="article-limit" defaultValue="100" aria-label="Article Limit">
               <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
