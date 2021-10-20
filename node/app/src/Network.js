@@ -5,7 +5,7 @@ const Network = (props) => {
   return(
     <ForceGraph2D
       graphData={props.data}
-      linkColor='#eeeeee'
+      linkColor={() => '#eeeeee'}
       nodeLabel={'label'}
       nodeColor={'color'}
       nodeRelSize={8}

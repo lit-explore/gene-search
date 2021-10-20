@@ -58,7 +58,7 @@ const ResultsTable = (props) => {
   } = useTable({
       columns,
       data,
-      initialState: { pageIndex: 2, pageSize: 5 },
+      initialState: { pageIndex: 0, pageSize: 5 },
    },
     usePagination
   )
