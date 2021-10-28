@@ -28,8 +28,18 @@ const ResultsTable = (props) => {
       accessor: 'genes',
     },
     {
-      Header: '# Genes',
-      accessor: 'num_genes',
+      Header: '# Genes (target)',
+      accessor: 'num_matched',
+      width: 250
+    },
+    {
+      Header: '# Genes (total)',
+      accessor: 'num_total',
+      width: 250
+    },
+    {
+      Header: 'Score',
+      accessor: 'score',
       width: 250
     },
     {

@@ -6,9 +6,11 @@ const Network = (props) => {
     <ForceGraph2D
       graphData={props.data}
       linkColor={() => '#eeeeee'}
+      linkLabel={'num_shared'}
       nodeLabel={'label'}
       nodeColor={'color'}
       nodeRelSize={8}
+      nodeVal={node => node.score / 2}
       width={props.width}
       height={props.height}
     />

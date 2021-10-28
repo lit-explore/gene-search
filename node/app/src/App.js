@@ -12,6 +12,8 @@ import useWindowSize from './hooks/useWindowSize';
 function App() { 
 
   const [articleMatches, setArticleMatches] = useState([])
+  const [clusterInfo, setClusterInfo] = useState({})
+  const [excludedGenes, setExcludedGenes] = useState("")
   const [networkData, setNetworkData] = useState({nodes: [], links: []})
   const [networkDims, setNetworkDims] = useState({width: 640, height: 480})
 
@@ -22,9 +24,6 @@ function App() {
     if ((windowSize.height === undefined) || (windowSize.width === undefined)) {
       return
     }
-    console.log("Window size changed:")
-    console.log(windowSize.width)
-    console.log(windowSize.height)
 
     setNetworkDims({
       width: windowSize.width * 0.65,
@@ -47,19 +46,15 @@ function App() {
     // submit query to API
     axios.get(queryURL).then(resp => {
       console.log(resp)
-      setArticleMatches(resp.data.articles)
 
-      let articles = resp.data.articles
+      setArticleMatches(resp.data.network.nodes)
+      setClusterInfo(resp.data.clusters)
+      setExcludedGenes(resp.data.info.not_present_in_top_articles)
+      setNetworkData(resp.data.network)
 
       // network tooltip text (title + genes)
-      articles.forEach(entry => {
+      resp.data.network.nodes.forEach(entry => {
         entry.label = entry.citation + "<br /><b>" + entry.genes + "</b>"
-      })
-
-      // build graph data object
-      setNetworkData({
-        "nodes": articles,
-        "links": resp.data.network.map(x => ({'source': x[0], 'target': x[1]}))
       })
     }).catch(function (error) {
       console.log("[Error] Error encountered!");
@@ -72,17 +67,19 @@ function App() {
   return (
     <Container fluid>
       <Row>
-    <h2 style={{margin: "20px 0px"}}>Pubmed Gene Set Search</h2>
+        <h2 style={{margin: "20px 0px"}}>Pubmed Gene Set Search</h2>
       </Row>
       <Row>
         <Col xs={3}> 
           <Form onSubmit={handleSubmit}>
             <Form.Label>Gene Symbols (comma- or newline-separated)</Form.Label>
             <Form.Control id="gene-input" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
-            <Form.Select id="article-limit" defaultValue="100" aria-label="Article Limit">
+            <Form.Select id="article-limit" defaultValue="50" aria-label="Article Limit">
               <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
+              <option value="150">150</option>
+              <option value="200">200</option>
               <option value="250">250</option>
               <option value="500">500</option>
             </Form.Select>
@@ -90,6 +87,31 @@ function App() {
               Submit
             </Button>
           </Form>
+          <hr />
+          <div id='cluster-results'>
+          { Object.entries(clusterInfo).map(([clustId, cluster]) => (
+            <div key={"cluster-" + clustId}>
+              <span style={{color: cluster.color}}>
+               Cluster { clustId } (n={cluster.num_articles} articles)
+            </span><br />
+            <ul>
+              Common Genes:
+              { Object.entries(cluster.genes).slice(0, 5).map(([gene, geneCount]) => (
+                <li key={"cluster-" + clustId + "-gene-" + gene}>{gene} ({geneCount})</li>
+              ))}
+            </ul>
+            </div>
+          ))}
+          </div>
+          <hr />
+          { excludedGenes !== "" &&
+            <div id='infrequent-genes'>
+              The following genes were not frequently found among the high-scoring 
+              articles, and have been excluded from part of the analysis:
+              <br />
+              { excludedGenes }
+            </div>
+          }
         </Col>
         <Col>
           <Network 

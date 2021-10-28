@@ -1,4 +1,5 @@
 ipython
 pandas
+pyarrow
 scikit-learn
 biothings_client
