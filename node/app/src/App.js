@@ -74,6 +74,7 @@ function App() {
           <Form onSubmit={handleSubmit}>
             <Form.Label>Gene Symbols (comma- or newline-separated)</Form.Label>
             <Form.Control id="gene-input" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
+            <Form.Label>Network size limit</Form.Label>
             <Form.Select id="article-limit" defaultValue="50" aria-label="Article Limit">
               <option value="25">25</option>
               <option value="50">50</option>
@@ -96,7 +97,7 @@ function App() {
             </span><br />
             <ul>
               Common Genes:
-              { Object.entries(cluster.genes).slice(0, 5).map(([gene, geneCount]) => (
+              { Object.entries(cluster.genes).slice(0, 10).map(([gene, geneCount]) => (
                 <li key={"cluster-" + clustId + "-gene-" + gene}>{gene} ({geneCount})</li>
               ))}
             </ul>

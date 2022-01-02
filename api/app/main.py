@@ -147,7 +147,7 @@ def cluster_articles(dat):
 
     # choose number of clusters to use for k-means (min: 2)
     # TODO: add parameters as options to query API..
-    num_clusters = max(2, int(dat.shape[0] / 30))
+    num_clusters = max(2, int(dat.shape[0] / 20))
 
     kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(dat)
     clusters = kmeans.labels_.tolist()

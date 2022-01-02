@@ -3,14 +3,16 @@ import ForceGraph2D from "react-force-graph-2d";
 
 const Network = (props) => {
   return(
+      //nodeVal={node => Math.log(node.score + 1)}
     <ForceGraph2D
       graphData={props.data}
       linkColor={() => '#eeeeee'}
       linkLabel={'num_shared'}
+      linkWidth={link => link.num_shared / 6}
       nodeLabel={'label'}
       nodeColor={'color'}
       nodeRelSize={8}
-      nodeVal={node => node.score / 2}
+      nodeVal={node => Math.log(node.score + 1)/ 4}
       width={props.width}
       height={props.height}
     />
