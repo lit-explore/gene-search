@@ -11,7 +11,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - "/data/proj/pubtator/2021-10-16/:/data"
+      - "/data/proj/pubtator/2022-01-08/:/data"
   node:
     build:
       context: node/

@@ -3,13 +3,18 @@
 Pubtator x Gene Search
 KH (Oct2021)
 
+- [ ] instead of evaluating all pubmed articles with >= 1 gene match,
+      choose a cutoff that scales with the # input genes; this should help speed things
+      up significantly for larger input queries
 - [ ] cluster summary (genes assoc. with each cluster?)
 - [ ] cache pmid citation lookups to avoid re-querying server?..
+    - [ ] store mapping from gene queries to files
 - [ ] add k-means "k" param to api?
 
 """
 import datetime
 import json
+import os
 import numpy as np
 import pandas as pd
 import urllib.request
@@ -18,6 +23,7 @@ from biothings_client import get_client
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.cluster import KMeans
+from typing import Optional
 
 app = FastAPI()
 
@@ -34,79 +40,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# gene -> pubmed id dataset (entrez/pmids)
-gene_pmid_infile = "/data/pmids/gene-pmids.json"
+# minimum p-value cutoff to use when compute weighted article scores
+MIN_PVAL = 1e-100
 
-with open(gene_pmid_infile) as fp:
-    gene_pmids = json.loads(fp.read())
+# load gene symbol -> entrez id mapping (march 23, 2022)
+# n = 43,491 gene symbols
+gene_mapping_infile = "data/symbol_entrez.tsv"
 
-# pmid -> # unique gene mentions
+with open(gene_mapping_infile) as fp:
+    gene_mapping = pd.read_csv(gene_mapping_infile, sep='\t').set_index('symbol')
+
+# load entrez -> pmid mapping
+# n ~ 26,300 entrez ids
+entrez_pmid_infile = "/data/pmids/gene-pmids.json"
+
+with open(entrez_pmid_infile) as fp:
+    entrez_pmids = json.loads(fp.read())
+
+# pmid -> total # unique gene mentions for each article
+# n ~ 4.35m pubmed ids
 gene_counts_infile = "/data/gene-counts/pmid_gene_counts.feather"
 
 gene_counts = pd.read_feather(gene_counts_infile).set_index("pmid")
 
+# create output dir, if it doesn't already exist
+if not os.path.exists("/data/gene-search/"):
+    os.makedirs("/data/gene-search/", mode=0o755)
 
-def get_gene_pmid_mat(symbols):
+def get_pmid_symbol_comat(target_symbols):
     """Generates an <article x gene> matrix for genes of interest"""
-    # convert gene symbols to entrez ids used in pubtator dataset
-    mg = get_client("gene")
-
-    mapping = mg.querymany(
-        symbols, scopes="symbol", species=9606, fields="entrezgene", as_dataframe=True
-    )
-    mapping = mapping[~mapping.entrezgene.isna()]
-
     # check for any genes that could not be mapped and remove them..
-    symbols = pd.Series(symbols)
-
-    mask = symbols.isin(mapping.index)
+    target_symbols = pd.Series(target_symbols)
 
     # exclude genes that could not be mapped, or whose mapped entrez ids are
     # not present in the pubtator dataset
-    if mask.sum() < symbols.shape[0]:
-        symbols = symbols[mask]
+    mask = target_symbols.isin(gene_mapping.index)
+    target_symbols = target_symbols[mask]
 
-    missing_symbols = mapping.index[~mapping.entrezgene.isin(gene_pmids)]
+    # convert gene target_symbols to entrez ids (entrez_pmids is indexed by string ids)
+    target_entrez = gene_mapping.loc[target_symbols].entrezgene.values
+    target_entrez = [str(x) for x in target_entrez]
 
-    if len(missing_symbols) > 0:
-        symbols = symbols[~symbols.isin(missing_symbols)]
+    # exlude genes for which no entrez is present in the entrez -> pmid mapping
+    mask = pd.Series([x in entrez_pmids.keys() for x in target_entrez])
+    target_entrez = pd.Series(target_entrez)[mask].values
 
-    target_entrez = mapping.loc[symbols].entrezgene.values
+    target_symbols = target_symbols[mask.values]
 
     # subset pmids to get only genes of interest
-    dat = {key: gene_pmids[key] for key in target_entrez}
+    entrez_pmids_subset = {}
 
-    # get a list of all pubmed ids associated with at least one of the genes
-    all_pmids = sorted(set(sum([dat[key] for key in dat], [])))
+    for entrez_id in target_entrez:
+        entrez_pmids_subset[entrez_id] = entrez_pmids[entrez_id]
+        entrez_pmids_subset[entrez_id]
 
-    print(
-        f"Found {len(all_pmids)} articles with one or more of the genes of interest.."
-    )
+    # create a list of lists containing all pmids associated with >= target gene
+    pmid_lists = [entrez_pmids_subset[entrez_id] for entrez_id in entrez_pmids_subset]
 
-    # convert to a <pmid x gene> matrix
-    res: dict[str, list] = {}
+    # flatten, sort, remove duplicates, and convert to a series
+    matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
+
+    print(f"Found {len(matching_pmids)} articles with one or more of the genes of interest..")
+
+    # convert to a binary <pmid x gene> co-occurrence matrix
+    pmid_symbol_rows = []
 
     for i, gene in enumerate(target_entrez):
-        res[gene] = []
+        row = matching_pmids.isin(entrez_pmids_subset[gene]).astype(np.int64)
+        pmid_symbol_rows.append(row)
 
-        print(f"Adding entrez gene {gene} ({i + 1}/{len(target_entrez)})...")
+    pmid_symbol_mat = pd.concat(pmid_symbol_rows, axis=1)
 
-        for pmid in all_pmids:
-            res[gene].append(pmid in dat[gene])
+    # convert boolean to numeric (0|1)
+    #  pmid_symbol_mat.replace({False: 0, True: 1}, inplace=True)
 
-    dat = pd.DataFrame.from_dict(res)
-    dat.columns = symbols
-    dat.index = all_pmids
+    pmid_symbol_mat.columns = target_symbols
+    pmid_symbol_mat.index = matching_pmids
 
-    return dat
-
+    return pmid_symbol_mat
 
 # helper function chunk a list
 # https://stackoverflow.com/a/312464/554531
 def chunks(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
-
 
 def query_article_info(pmids):
     """Uses PubMed API to retrieve additional information for each article hit"""
@@ -135,37 +152,37 @@ def query_article_info(pmids):
     return citations
 
 
-def cluster_articles(dat):
+def cluster_articles(pmid_symbol_comat):
     """Clusters articles by their similarity in genes mentioned"""
-    print(f"Clustering {dat.shape[0]} articles...")
+    print(f"Clustering {pmid_symbol_comat.shape[0]} articles...")
 
     # mean center
-    dat = dat.apply(lambda x: x - x.mean())
+    pmid_symbol_comat = pmid_symbol_comat.apply(lambda x: x - x.mean())
 
     # apply sign fun and cluster
-    dat = np.sign(dat)
+    pmid_symbol_comat = np.sign(pmid_symbol_comat)
 
     # choose number of clusters to use for k-means (min: 2)
     # TODO: add parameters as options to query API..
-    num_clusters = max(2, int(dat.shape[0] / 20))
+    num_clusters = max(2, int(pmid_symbol_comat.shape[0] / 20))
 
-    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(dat)
+    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(pmid_symbol_comat)
     clusters = kmeans.labels_.tolist()
 
     res = {}
 
-    for i, pmid in enumerate(dat.index):
+    for i, pmid in enumerate(pmid_symbol_comat.index):
         res[pmid] = clusters[i]
 
     return res
 
 
-def build_network(dat):
+def build_network(pmid_symbol_comat):
     """constructs a simple network based on the similarity of article genes mentions"""
     print("Building network..")
 
     # measure pairwise article correlation
-    cor_df = dat.T.corr()
+    cor_df = pmid_symbol_comat.T.corr()
 
     cor_mat = cor_df.to_numpy()
     np.fill_diagonal(cor_mat, 0)
@@ -176,7 +193,7 @@ def build_network(dat):
 
     ind = np.where(cor_mat > 0)
 
-    pmids = dat.index.tolist()
+    pmids = pmid_symbol_comat.index.tolist()
 
     indFrom = ind[0].tolist()
     indTo = ind[1].tolist()
@@ -188,7 +205,7 @@ def build_network(dat):
         article2 = pmids[indTo[i]]
 
         # number of genes shared by articles
-        num_shared = (dat.loc[article1] & dat.loc[article1]).sum()
+        num_shared = (pmid_symbol_comat.loc[article1] & pmid_symbol_comat.loc[article1]).sum()
 
         edges.append(
             {
@@ -203,52 +220,85 @@ def build_network(dat):
 
 
 @app.get("/query/")
-async def query(genes: str, limit: int = 100):
+async def query(genes: str, pvalues: Optional[str] = None, max_articles: Optional[int] = 100):
     # split list of genes
     target_symbols = genes.split(",")
 
-    # get <pmid x gene> matrix
-    dat = get_gene_pmid_mat(target_symbols)
+    # get binary <pmid x gene> matrix
+    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols)
 
     # devel: store pmid x gene mat..
     now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    dat.reset_index().to_feather(f"/data/gene-search/{now}.feather")
+    pmid_symbol_comat.reset_index().rename(columns={"index": "pmid"}).to_feather(f"/data/gene-search/{now}.feather")
 
-    # get number of matched genes for each article
-    dat_sums = dat.sum(axis=1)
+    # get number of genes matched in each article
+    num_matched = pmid_symbol_comat.sum(axis=1)
 
+    # get the _total_ number of genes associated with each article
+    pmid_gene_counts = gene_counts.loc[num_matched.index].num
+
+    # ratio of matched genes to total genes
+    ratio_matched = num_matched / pmid_gene_counts
+
+    # if p-values were provided, weight gene contributions by -log10 (p-values)
+    if pvalues is not None:
+        dat_weighted = pmid_symbol_comat.copy()
+
+        # create a dict mapping from gene symbol -> p-value
+        target_pvals = {}
+
+        for i, pval in enumerate(pvalues.split(",")):
+            target_pvals[target_symbols[i]] = np.float64(pval)
+
+        # multiply columns of co-ocurrence matrix by p-value based weights
+        for i, symbol in enumerate(dat_weighted.columns):
+            dat_weighted.iloc[:, i] *= -np.log10(np.max([MIN_PVAL, target_pvals[symbol]]))
+
+        # rescale to [0, max(num_matched)]
+        max_matches = num_matched.max().max()
+        max_weight = dat_weighted.max().max()
+
+        dat_weighted = (dat_weighted / max_weight) * max_matches
+
+        # get total scores for each article
+        article_scores = dat_weighted.sum(axis=1)
+    else:
+        article_scores = num_matched
+
+    #
     # score = <matched>^2 * <matched/total>
+    #
     # this way, articles with a large number of matched genes are prioritized,
     # penalizing articles which simply include a large number of genes
-    pmid_gene_counts = gene_counts.loc[dat_sums.index].num
+    #
+    article_scores = article_scores** 2 * ratio_matched
 
-    scores = dat_sums ** 2 * (dat_sums / pmid_gene_counts)
-    scores = scores.sort_values(ascending=False).head(limit)
+    article_scores = article_scores.sort_values(ascending=False).head(max_articles)
 
     # get subset of article x gene matrix corresponding to the top N hits and cluster
     # articles based on similarity in the genes mentioned..
-    dat_subset = dat[dat.index.isin(scores.index)]
+    pmid_symbol_comat_top = pmid_symbol_comat[pmid_symbol_comat.index.isin(article_scores.index)]
 
     # convert to binary
-    dat_subset.replace({False: 0, True: 1}, inplace=True)
+    #dat_subset.replace({False: 0, True: 1}, inplace=True)
 
     # drop genes which are not present in any articles, after filtering..
-    mask = dat_subset.sum() > 0
+    mask = pmid_symbol_comat_top.sum() > 0
 
-    dropped_genes = ", ".join(sorted(dat_subset.columns[~mask]))
+    dropped_genes = ", ".join(sorted(pmid_symbol_comat_top.columns[~mask]))
 
     print(
         f"Dropping genes that don't appear in any of the top-scoring articles: {dropped_genes}"
     )
-    dat_subset = dat_subset.loc[:, mask]
+    pmid_symbol_comat_top = pmid_symbol_comat_top.loc[:, mask]
 
-    clusters = cluster_articles(dat_subset)
+    clusters = cluster_articles(pmid_symbol_comat_top)
 
     # generate network
-    net = build_network(dat_subset)
+    net = build_network(pmid_symbol_comat_top)
 
     # query pubmed api for article info
-    citations = query_article_info(list(dat_subset.index))
+    citations = query_article_info(list(pmid_symbol_comat_top.index))
 
     # cluster color map
     # todo: add check & interpolate colors if more are needed..
@@ -276,7 +326,7 @@ async def query(genes: str, limit: int = 100):
         clust_pmids = clust_dict.keys()
 
         # get submat associated with cluster, and count genes
-        clust_submat = dat_subset[dat_subset.index.isin(clust_pmids)]
+        clust_submat = pmid_symbol_comat_top[pmid_symbol_comat_top.index.isin(clust_pmids)]
 
         clust_counts = clust_submat.sum()
         count_dict = clust_counts.sort_values(ascending=False).to_dict(into=OrderedDict)
@@ -287,9 +337,9 @@ async def query(genes: str, limit: int = 100):
             "num_articles": len(clust_pmids),
         }
 
-    scores_dict = scores.to_dict()
+    scores_dict = article_scores.to_dict()
 
-    dat_subset_sums = dat_sums.loc[dat_subset.index]
+    dat_subset_sums = num_matched.loc[pmid_symbol_comat_top.index]
 
     # generate result json, including gene ids, etc. for each article
     articles = []
@@ -297,7 +347,7 @@ async def query(genes: str, limit: int = 100):
     for pmid, num_genes in dat_subset_sums.items():
 
         # retrieve the associated gene names
-        pmid_genes = list(dat.loc[pmid][dat.loc[pmid]].index)
+        pmid_genes = list(pmid_symbol_comat_top.loc[pmid][pmid_symbol_comat_top.loc[pmid] == 1].index)
 
         articles.append(
             {
@@ -318,7 +368,12 @@ async def query(genes: str, limit: int = 100):
 
     info = {"not_present_in_top_articles": dropped_genes}
 
-    res = {"clusters": clust_info, "network": net, "info": info}
+    query_dict = {"genes": target_symbols}
+
+    if pvalues is not None:
+        query_dict["pvalues"] = [np.float64(pval) for pval in pvalues.split(",")]
+
+    res = {"query": query_dict, "clusters": clust_info, "network": net, "info": info}
 
     # testing..
     with open(f"/data/gene-search/{now}.json", "w") as fp:

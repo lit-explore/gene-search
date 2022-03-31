@@ -33,13 +33,20 @@ function App() {
 
   function handleSubmit(event) {
     // construct query URL
-    const input = document.getElementById("gene-input").value 
-    const genes = input.trim().replace(/[,\n]/g, ",")
+    const geneInput = document.getElementById("input-genes").value 
+    const genes = geneInput.trim().replace(/[,\n]/g, ",")
 
-    const limit = document.getElementById("article-limit").value
+    const pvalInput = document.getElementById("input-pvalues").value 
+    const pvalues = pvalInput.trim().replace(/[,\n]/g, ",")
+
+    const maxArticles = document.getElementById("max-articles").value
 
     const baseURL = "http://localhost:5000/query/"
-    const queryURL = `${baseURL}?genes=${genes}&limit=${limit}`
+    let queryURL = `${baseURL}?genes=${genes}&max_articles=${maxArticles}`
+
+    if (pvalues.length > 0) {
+      queryURL = queryURL + `&pvalues=${pvalues}`
+    }
 
     console.log(queryURL)
 
@@ -73,9 +80,11 @@ function App() {
         <Col xs={3}> 
           <Form onSubmit={handleSubmit}>
             <Form.Label>Gene Symbols (comma- or newline-separated)</Form.Label>
-            <Form.Control id="gene-input" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
-            <Form.Label>Network size limit</Form.Label>
-            <Form.Select id="article-limit" defaultValue="50" aria-label="Article Limit">
+            <Form.Control id="input-genes" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
+            <Form.Label>Gene P-values (comma- or newline-separated; optional)</Form.Label>
+            <Form.Control id="input-pvalues" as="textarea" placeholder="Gene P-values" style={{ height: '100px' }} />
+            <Form.Label>Article limit</Form.Label>
+            <Form.Select id="max-articles" defaultValue="50" aria-label="Article Limit">
               <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
