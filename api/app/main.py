@@ -41,6 +41,7 @@ app.add_middleware(
 )
 
 # minimum p-value cutoff to use when compute weighted article scores
+# TODO: convert to api parameter..
 MIN_PVAL = 1e-100
 
 # load gene symbol -> entrez id mapping (march 23, 2022)
@@ -49,6 +50,13 @@ gene_mapping_infile = "data/symbol_entrez.tsv"
 
 with open(gene_mapping_infile) as fp:
     gene_mapping = pd.read_csv(gene_mapping_infile, sep='\t').set_index('symbol')
+
+# load disease mesh term -> pmid mapping
+# n ~ 11,000 MeSH terms
+disease_pmid_infile = "/data/pmids/disease-pmids.json"
+
+with open(disease_pmid_infile) as fp:
+    mesh_pmids = json.loads(fp.read())
 
 # load entrez -> pmid mapping
 # n ~ 26,300 entrez ids
@@ -67,7 +75,7 @@ gene_counts = pd.read_feather(gene_counts_infile).set_index("pmid")
 if not os.path.exists("/data/gene-search/"):
     os.makedirs("/data/gene-search/", mode=0o755)
 
-def get_pmid_symbol_comat(target_symbols):
+def get_pmid_symbol_comat(target_symbols, disease=None):
     """Generates an <article x gene> matrix for genes of interest"""
     # check for any genes that could not be mapped and remove them..
     target_symbols = pd.Series(target_symbols)
@@ -100,7 +108,16 @@ def get_pmid_symbol_comat(target_symbols):
     # flatten, sort, remove duplicates, and convert to a series
     matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
 
-    print(f"Found {len(matching_pmids)} articles with one or more of the genes of interest..")
+    num_matches = len(matching_pmids)
+    print(f"Found {num_matches} articles with one or more of the genes of interest..")
+
+    # if disease specified, filter to include only articles relating to that disease
+    if disease is not None:
+        num_before = num_matches
+        matching_pmids = matching_pmids[matching_pmids.isin(mesh_pmids[disease])]
+        num_after = len(matching_pmids)
+
+        print(f"Excluding {num_before - num_after}/{num_before} articles not matching specified disease.")
 
     # convert to a binary <pmid x gene> co-occurrence matrix
     pmid_symbol_rows = []
@@ -219,13 +236,25 @@ def build_network(pmid_symbol_comat):
     return {"links": edges}
 
 
-@app.get("/query/")
-async def query(genes: str, pvalues: Optional[str] = None, max_articles: Optional[int] = 100):
+@app.post("/query/")
+async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str] = None, 
+                max_articles: Optional[int] = 100):
     # split list of genes
     target_symbols = genes.split(",")
 
+    # validate disese MeSH term, if specified
+    if disease is not None:
+        print(disease)
+        if disease not in mesh_pmids.keys():
+            return({"error": "Unable to find specified disease MeSH ID"})
+
+    # validate p-value input length
+    if pvalues is not None:
+        if len(pvalues.split(",")) != len(target_symbols):
+            return({"error": "Gene symbol and P-value inputs have different lengths!"})
+
     # get binary <pmid x gene> matrix
-    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols)
+    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols, disease)
 
     # devel: store pmid x gene mat..
     now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -278,9 +307,6 @@ async def query(genes: str, pvalues: Optional[str] = None, max_articles: Optiona
     # get subset of article x gene matrix corresponding to the top N hits and cluster
     # articles based on similarity in the genes mentioned..
     pmid_symbol_comat_top = pmid_symbol_comat[pmid_symbol_comat.index.isin(article_scores.index)]
-
-    # convert to binary
-    #dat_subset.replace({False: 0, True: 1}, inplace=True)
 
     # drop genes which are not present in any articles, after filtering..
     mask = pmid_symbol_comat_top.sum() > 0

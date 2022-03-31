@@ -38,6 +38,8 @@ function App() {
 
     const pvalInput = document.getElementById("input-pvalues").value 
     const pvalues = pvalInput.trim().replace(/[,\n]/g, ",")
+    
+    const diseaseInput = document.getElementById("input-disease-mesh").value
 
     const maxArticles = document.getElementById("max-articles").value
 
@@ -48,10 +50,14 @@ function App() {
       queryURL = queryURL + `&pvalues=${pvalues}`
     }
 
+    if (diseaseInput.length > 0) {
+      queryURL = queryURL + `&disease=${diseaseInput}`
+    }
+
     console.log(queryURL)
 
     // submit query to API
-    axios.get(queryURL).then(resp => {
+    axios.post(queryURL).then(resp => {
       console.log(resp)
 
       setArticleMatches(resp.data.network.nodes)
@@ -79,10 +85,21 @@ function App() {
       <Row>
         <Col xs={3}> 
           <Form onSubmit={handleSubmit}>
-            <Form.Label>Gene Symbols (comma- or newline-separated)</Form.Label>
+            <Form.Label>Gene Symbols</Form.Label>
             <Form.Control id="input-genes" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
-            <Form.Label>Gene P-values (comma- or newline-separated; optional)</Form.Label>
+            <Form.Text className="text-muted">
+              Comma- or newline-separated gene symbols.
+            </Form.Text>
+            <Form.Label>Gene P-values (Optional)</Form.Label>
             <Form.Control id="input-pvalues" as="textarea" placeholder="Gene P-values" style={{ height: '100px' }} />
+            <Form.Text className="text-muted">
+              Comma- or newline-separated P-values.
+            </Form.Text>
+            <Form.Label>Disease MeSH term (optional)</Form.Label>
+            <Form.Control id="input-disease-mesh" placeholder='ex. "MESH:D009101"' />
+            <Form.Text className="text-muted">
+              Optional disease filter. If specified, only articles associated with the specified disease MeSH term will be considered.
+            </Form.Text>
             <Form.Label>Article limit</Form.Label>
             <Form.Select id="max-articles" defaultValue="50" aria-label="Article Limit">
               <option value="25">25</option>
