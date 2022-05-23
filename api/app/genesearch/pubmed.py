@@ -8,7 +8,7 @@ import json
 import urllib.request
 
 def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame, 
-                          entrez_pmids:dict, pmids_allowed: Optional[List[str]] = None) -> pd.DataFrame:
+                          pubtator_entrez_pmids:dict, pmids_allowed: Optional[List[str]] = None) -> pd.DataFrame:
     """
     Generates an <article x gene> matrix for genes of interest
 
@@ -24,35 +24,36 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     out: pd.DataFrame
         Gene x Pubmed article co-occurrence matrix as a pandas dataframe
     """
-    # check for any genes that could not be mapped and remove them..
-    target_series = pd.Series(target_symbols)
+    target_genes = pd.Series(target_symbols)
 
-    # exclude genes that could not be mapped, or whose mapped entrez ids are
-    # not present in the pubtator dataset
-    mask = target_series.isin(gene_mapping.index)
-    target_series = target_series[mask]
+    # exclude any genes that either can't be mapped to entrez ids
+    mask = target_genes.isin(gene_mapping.index)
+    target_genes = target_genes[mask]
 
-    # convert gene target_series to entrez ids (entrez_pmids is indexed by string ids)
-    target_entrez = gene_mapping.loc[target_series].entrezgene.values
-    target_entrez = [str(x) for x in target_entrez]
+    # convert gene symbols to entrez ids
+    target_entrez = gene_mapping.loc[target_genes].entrezgene.values
+    target_entrez = pd.Series([str(x) for x in target_entrez])
 
-    # exlude genes for which no entrez is present in the entrez -> pmid mapping
-    mask = pd.Series([x in entrez_pmids.keys() for x in target_entrez])
-    target_entrez = pd.Series(target_entrez)[mask].values
+    # exclude any genes that aren't present in the pubtator data
+    #mask = pd.Series([x in pubtator_entrez_pmids.keys() for x in target_entrez])
+    mask = target_entrez.isin(pubtator_entrez_pmids.keys())
 
-    target_series = target_series[mask.values]
+    #  target_entrez = pd.Series(target_entrez)[mask].values
+    valid_entrez_ids = target_entrez[mask].values
 
-    # subset pmids to get only genes of interest
+    target_genes = target_genes[mask.values]
+
+    # get subset of gene/article mapping for genes of interest
     entrez_pmids_subset = {}
 
-    for entrez_id in target_entrez:
-        entrez_pmids_subset[entrez_id] = entrez_pmids[entrez_id]
+    for entrez_id in valid_entrez_ids:
+        entrez_pmids_subset[entrez_id] = pubtator_entrez_pmids[entrez_id]
         entrez_pmids_subset[entrez_id]
 
-    # create a list of lists containing all pmids associated with >= target gene
+    # get a list of all unique pubmed article ids associated with >= 1 gene of interest
+    # TODO (May 21, 2022): add optional step here to limit result to articles associated
+    # with >= N genes?
     pmid_lists = [entrez_pmids_subset[entrez_id] for entrez_id in entrez_pmids_subset]
-
-    # flatten, sort, remove duplicates, and convert to a series
     matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
 
     num_matches = len(matching_pmids)
@@ -69,7 +70,7 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     # convert to a binary <pmid x gene> co-occurrence matrix
     pmid_symbol_rows = []
 
-    for i, gene in enumerate(target_entrez):
+    for i, gene in enumerate(valid_entrez_ids):
         row = matching_pmids.isin(entrez_pmids_subset[gene]).astype(np.int64)
         pmid_symbol_rows.append(row)
 
@@ -78,7 +79,7 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     # convert boolean to numeric (0|1)
     #  pmid_symbol_mat.replace({False: 0, True: 1}, inplace=True)
 
-    pmid_symbol_mat.columns = target_series
+    pmid_symbol_mat.columns = target_genes
     pmid_symbol_mat.index = matching_pmids
 
     return pmid_symbol_mat

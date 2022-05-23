@@ -48,10 +48,16 @@ MIN_PVAL = 1e-100
 
 # load gene symbol -> entrez id mapping (created: march 23, 2022)
 # n = 43,491 gene symbols
+#            entrezgene
+#  symbol
+#  A1BG               1
+#  A1BG-AS1      503538
+#  A1CF           29974
 gene_mapping_infile = "data/symbol_entrez.tsv"
 
 with open(gene_mapping_infile) as fp:
     gene_mapping = pd.read_csv(gene_mapping_infile, sep='\t').set_index('symbol')
+
 
 # load disease mesh term -> pmid mapping
 # n ~ 11,000 MeSH terms
@@ -60,7 +66,8 @@ disease_pmid_infile = "/data/pmids/disease-pmids.json"
 with open(disease_pmid_infile) as fp:
     mesh_pmids = json.loads(fp.read())
 
-# load entrez -> pmid mapping
+# load entrez id -> pmid mapping
+# generated from pubtator data
 # n ~ 26,300 entrez ids
 entrez_pmid_infile = "/data/pmids/gene-pmids.json"
 
