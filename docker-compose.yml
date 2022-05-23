@@ -16,7 +16,6 @@ services:
     build:
       context: node/
       dockerfile: Dockerfile
-        #command: "npm start"
     command: "yarn start"
     user: "node"
     working_dir: /home/node/app

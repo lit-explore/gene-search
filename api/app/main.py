@@ -17,13 +17,15 @@ import json
 import os
 import numpy as np
 import pandas as pd
-import urllib.request
 from collections import OrderedDict
 from biothings_client import get_client
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sklearn.cluster import KMeans
-from typing import Optional
+from typing import Optional, List
+
+from genesearch.pubmed import query_article_info, get_pmid_symbol_comat
+from genesearch.clustering import cluster_articles
+from genesearch.network import build_network
 
 app = FastAPI()
 
@@ -44,7 +46,7 @@ app.add_middleware(
 # TODO: convert to api parameter..
 MIN_PVAL = 1e-100
 
-# load gene symbol -> entrez id mapping (march 23, 2022)
+# load gene symbol -> entrez id mapping (created: march 23, 2022)
 # n = 43,491 gene symbols
 gene_mapping_infile = "data/symbol_entrez.tsv"
 
@@ -65,176 +67,15 @@ entrez_pmid_infile = "/data/pmids/gene-pmids.json"
 with open(entrez_pmid_infile) as fp:
     entrez_pmids = json.loads(fp.read())
 
-# pmid -> total # unique gene mentions for each article
+# load pmid -> unique gene counts
+# number of unique gene mentions for each pubmed article
 # n ~ 4.35m pubmed ids
 gene_counts_infile = "/data/gene-counts/pmid_gene_counts.feather"
-
 gene_counts = pd.read_feather(gene_counts_infile).set_index("pmid")
 
 # create output dir, if it doesn't already exist
 if not os.path.exists("/data/gene-search/"):
     os.makedirs("/data/gene-search/", mode=0o755)
-
-def get_pmid_symbol_comat(target_symbols, disease=None):
-    """Generates an <article x gene> matrix for genes of interest"""
-    # check for any genes that could not be mapped and remove them..
-    target_symbols = pd.Series(target_symbols)
-
-    # exclude genes that could not be mapped, or whose mapped entrez ids are
-    # not present in the pubtator dataset
-    mask = target_symbols.isin(gene_mapping.index)
-    target_symbols = target_symbols[mask]
-
-    # convert gene target_symbols to entrez ids (entrez_pmids is indexed by string ids)
-    target_entrez = gene_mapping.loc[target_symbols].entrezgene.values
-    target_entrez = [str(x) for x in target_entrez]
-
-    # exlude genes for which no entrez is present in the entrez -> pmid mapping
-    mask = pd.Series([x in entrez_pmids.keys() for x in target_entrez])
-    target_entrez = pd.Series(target_entrez)[mask].values
-
-    target_symbols = target_symbols[mask.values]
-
-    # subset pmids to get only genes of interest
-    entrez_pmids_subset = {}
-
-    for entrez_id in target_entrez:
-        entrez_pmids_subset[entrez_id] = entrez_pmids[entrez_id]
-        entrez_pmids_subset[entrez_id]
-
-    # create a list of lists containing all pmids associated with >= target gene
-    pmid_lists = [entrez_pmids_subset[entrez_id] for entrez_id in entrez_pmids_subset]
-
-    # flatten, sort, remove duplicates, and convert to a series
-    matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
-
-    num_matches = len(matching_pmids)
-    print(f"Found {num_matches} articles with one or more of the genes of interest..")
-
-    # if disease specified, filter to include only articles relating to that disease
-    if disease is not None:
-        num_before = num_matches
-        matching_pmids = matching_pmids[matching_pmids.isin(mesh_pmids[disease])]
-        num_after = len(matching_pmids)
-
-        print(f"Excluding {num_before - num_after}/{num_before} articles not matching specified disease.")
-
-    # convert to a binary <pmid x gene> co-occurrence matrix
-    pmid_symbol_rows = []
-
-    for i, gene in enumerate(target_entrez):
-        row = matching_pmids.isin(entrez_pmids_subset[gene]).astype(np.int64)
-        pmid_symbol_rows.append(row)
-
-    pmid_symbol_mat = pd.concat(pmid_symbol_rows, axis=1)
-
-    # convert boolean to numeric (0|1)
-    #  pmid_symbol_mat.replace({False: 0, True: 1}, inplace=True)
-
-    pmid_symbol_mat.columns = target_symbols
-    pmid_symbol_mat.index = matching_pmids
-
-    return pmid_symbol_mat
-
-# helper function chunk a list
-# https://stackoverflow.com/a/312464/554531
-def chunks(lst, n):
-    for i in range(0, len(lst), n):
-        yield lst[i : i + n]
-
-def query_article_info(pmids):
-    """Uses PubMed API to retrieve additional information for each article hit"""
-    base_url = "https://api.ncbi.nlm.nih.gov/lit/ctxp/v1/pubmed/?format=citation&id="
-
-    citations = {}
-
-    pmid_chunks = list(chunks(pmids, 50))
-
-    for i, chunk in enumerate(pmid_chunks):
-        print(f"Querying PubMed API for citation info.. ({i + 1}/{len(pmid_chunks)})")
-
-        url = base_url + ",".join([str(x) for x in chunk])
-
-        headers = {"User-Agent": "KH-devel"}
-        req = urllib.request.Request(url, headers=headers)
-
-        with urllib.request.urlopen(req) as response:
-            res = json.loads(response.read())
-
-        # convert to a dict, indexed by pmid
-        for x in res:
-            pmid = int(x["id"].replace("pmid:", ""))
-            citations[pmid] = x["nlm"]["format"]
-
-    return citations
-
-
-def cluster_articles(pmid_symbol_comat):
-    """Clusters articles by their similarity in genes mentioned"""
-    print(f"Clustering {pmid_symbol_comat.shape[0]} articles...")
-
-    # mean center
-    pmid_symbol_comat = pmid_symbol_comat.apply(lambda x: x - x.mean())
-
-    # apply sign fun and cluster
-    pmid_symbol_comat = np.sign(pmid_symbol_comat)
-
-    # choose number of clusters to use for k-means (min: 2)
-    # TODO: add parameters as options to query API..
-    num_clusters = max(2, int(pmid_symbol_comat.shape[0] / 20))
-
-    kmeans = KMeans(n_clusters=num_clusters, random_state=0).fit(pmid_symbol_comat)
-    clusters = kmeans.labels_.tolist()
-
-    res = {}
-
-    for i, pmid in enumerate(pmid_symbol_comat.index):
-        res[pmid] = clusters[i]
-
-    return res
-
-
-def build_network(pmid_symbol_comat):
-    """constructs a simple network based on the similarity of article genes mentions"""
-    print("Building network..")
-
-    # measure pairwise article correlation
-    cor_df = pmid_symbol_comat.T.corr()
-
-    cor_mat = cor_df.to_numpy()
-    np.fill_diagonal(cor_mat, 0)
-
-    # for now, keep the top 10% of correlations..
-    cutoff = np.quantile(np.abs(cor_mat), 0.9)
-    cor_mat[abs(cor_mat) < cutoff] = 0
-
-    ind = np.where(cor_mat > 0)
-
-    pmids = pmid_symbol_comat.index.tolist()
-
-    indFrom = ind[0].tolist()
-    indTo = ind[1].tolist()
-
-    edges = []
-
-    for i in range(len(indFrom)):
-        article1 = pmids[indFrom[i]]
-        article2 = pmids[indTo[i]]
-
-        # number of genes shared by articles
-        num_shared = (pmid_symbol_comat.loc[article1] & pmid_symbol_comat.loc[article1]).sum()
-
-        edges.append(
-            {
-                "source": article1,
-                "target": article2,
-                "cor": cor_mat[indFrom[i], indTo[i]].item(),
-                "num_shared": num_shared.item(),
-            }
-        )
-
-    return {"links": edges}
-
 
 @app.post("/query/")
 async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str] = None, 
@@ -248,13 +89,20 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
         if disease not in mesh_pmids.keys():
             return({"error": "Unable to find specified disease MeSH ID"})
 
-    # validate p-value input length
+    # validate p-value input length, if specified
     if pvalues is not None:
         if len(pvalues.split(",")) != len(target_symbols):
             return({"error": "Gene symbol and P-value inputs have different lengths!"})
 
+    # if disease specified, limit to articles pertaining to that disease
+    pmids_allowed = None
+
+    if disease is not None:
+        pmids_allowed = mesh_pmids[disease]
+
     # get binary <pmid x gene> matrix
-    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols, disease)
+    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols, gene_mapping,
+                                              entrez_pmids, pmids_allowed)
 
     # devel: store pmid x gene mat..
     now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
