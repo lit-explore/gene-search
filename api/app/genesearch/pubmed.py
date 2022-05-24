@@ -1,10 +1,12 @@
 """
 Pubmed-related functions
 """
+import logging
 from typing import List, Optional
 import numpy as np
 import pandas as pd
 import json
+import sys
 import urllib.request
 
 def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame, 
@@ -24,6 +26,13 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     out: pd.DataFrame
         Gene x Pubmed article co-occurrence matrix as a pandas dataframe
     """
+    # setup logger
+    logging.basicConfig(stream=sys.stdout, 
+                        format='%(asctime) [%(levelname)s] %(message)s', 
+                        level=logging.INFO)
+    logger = logging.getLogger('gene-search')
+
+    # convert gene list to a pandas series
     target_genes = pd.Series(target_symbols)
 
     # exclude any genes that either can't be mapped to entrez ids
@@ -57,7 +66,7 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
 
     num_matches = len(matching_pmids)
-    print(f"Found {num_matches} articles with one or more of the genes of interest..")
+    logger.info(f"Found {num_matches} articles with one or more of the genes of interest..")
 
     # if disease specified, filter to include only articles relating to that disease
     if pmids_allowed is not None:
@@ -65,7 +74,7 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
         matching_pmids = matching_pmids[matching_pmids.isin(pmids_allowed)]
         num_after = len(matching_pmids)
 
-        print(f"Excluding {num_before - num_after}/{num_before} articles not included in allowed PMIDs.")
+        logger.info(f"Excluding {num_before - num_after}/{num_before} articles not included in allowed PMIDs.")
 
     # convert to a binary <pmid x gene> co-occurrence matrix
     pmid_symbol_rows = []
@@ -94,6 +103,12 @@ def query_article_info(pmids:list[str]):
         List of pubmed article ids
     """
 
+    # setup logger
+    logging.basicConfig(stream=sys.stdout,
+                        format='%(asctime) [%(levelname)s] %(message)s',
+                        level=logging.INFO)
+    logger = logging.getLogger('gene-search')
+
     base_url = "https://api.ncbi.nlm.nih.gov/lit/ctxp/v1/pubmed/?format=citation&id="
 
     citations = {}
@@ -107,7 +122,7 @@ def query_article_info(pmids:list[str]):
     pmid_chunks = list(chunks(pmids, 50))
 
     for i, chunk in enumerate(pmid_chunks):
-        print(f"Querying PubMed API for citation info.. ({i + 1}/{len(pmid_chunks)})")
+        logger.info(f"Querying PubMed API for citation info.. ({i + 1}/{len(pmid_chunks)})")
 
         url = base_url + ",".join([str(x) for x in chunk])
 

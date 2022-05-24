@@ -3,8 +3,6 @@ import pandas as pd
 
 def build_network(pmid_symbol_comat:pd.DataFrame) -> dict:
     """constructs a simple network based on the similarity of article genes mentions"""
-    print("Building network..")
-
     # measure pairwise article correlation
     cor_df = pmid_symbol_comat.T.corr()
 

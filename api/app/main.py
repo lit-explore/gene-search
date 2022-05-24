@@ -15,6 +15,8 @@ KH (Oct2021)
 import datetime
 import json
 import os
+import sys
+import logging
 import numpy as np
 import pandas as pd
 from collections import OrderedDict
@@ -28,6 +30,11 @@ from genesearch.clustering import cluster_articles
 from genesearch.network import build_network
 
 app = FastAPI()
+
+# setup logger
+logging.basicConfig(stream=sys.stdout, format='%(asctime) [%(levelname)s] %(message)s', 
+                    level=logging.INFO)
+logger = logging.getLogger('gene-search')
 
 # CORS
 origins = [
@@ -90,9 +97,8 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
     # split list of genes
     target_symbols = genes.split(",")
 
-    # validate disese MeSH term, if specified
+    # validate disease MeSH term, if specified
     if disease is not None:
-        print(disease)
         if disease not in mesh_pmids.keys():
             return({"error": "Unable to find specified disease MeSH ID"})
 
@@ -152,8 +158,8 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
     #
     # score = <matched>^2 * <matched/total>
     #
-    # this way, articles with a large number of matched genes are prioritized,
-    # penalizing articles which simply include a large number of genes
+    # this way, articles mentioning a large number of target genes are prioritized,
+    # while penalizing articles which simply include a large number of genes overall
     #
     article_scores = article_scores** 2 * ratio_matched
 
@@ -168,14 +174,16 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
 
     dropped_genes = ", ".join(sorted(pmid_symbol_comat_top.columns[~mask]))
 
-    print(
+    logger.info(
         f"Dropping genes that don't appear in any of the top-scoring articles: {dropped_genes}"
     )
     pmid_symbol_comat_top = pmid_symbol_comat_top.loc[:, mask]
 
+    logger.info(f"Clustering {pmid_symbol_comat_top.shape[0]} articles...")
     clusters = cluster_articles(pmid_symbol_comat_top)
 
     # generate network
+    logger.info("Building article network..")
     net = build_network(pmid_symbol_comat_top)
 
     # query pubmed api for article info
@@ -199,7 +207,7 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
     # generate section with cluster information
     clust_info = {}
 
-    print("Finalizing results...")
+    logger.info("Finalizing results...")
 
     for clust in set(clusters.values()):
         # get pmids associated with cluster

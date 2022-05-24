@@ -4,8 +4,6 @@ from sklearn.cluster import KMeans
 
 def cluster_articles(pmid_symbol_comat_df:pd.DataFrame):
     """Clusters articles by their similarity in genes mentioned"""
-    print(f"Clustering {pmid_symbol_comat_df.shape[0]} articles...")
-
     # mean center
     pmid_symbol_comat = pmid_symbol_comat_df.apply(lambda x: x - x.mean())
 
