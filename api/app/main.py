@@ -30,6 +30,7 @@ from genesearch.clustering import cluster_articles
 from genesearch.network import build_network
 
 app = FastAPI()
+#app = FastAPI(root_path="/api")
 
 # setup logger
 logging.basicConfig(stream=sys.stdout, format='%(asctime) [%(levelname)s] %(message)s', 
@@ -39,6 +40,7 @@ logger = logging.getLogger('gene-search')
 # CORS
 origins = [
     "http://localhost:81",
+    "http://lit.biodat.io"
 ]
 
 app.add_middleware(
@@ -91,7 +93,7 @@ gene_counts = pd.read_feather(gene_counts_infile).set_index("pmid")
 if not os.path.exists("/data/gene-search/"):
     os.makedirs("/data/gene-search/", mode=0o755)
 
-@app.post("/query/")
+@app.post("/api/")
 async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str] = None, 
                 max_articles: Optional[int] = 100):
     # split list of genes
@@ -271,3 +273,4 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
     print("Done!")
 
     return res
+

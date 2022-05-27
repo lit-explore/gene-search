@@ -43,7 +43,7 @@ function App() {
 
     const maxArticles = document.getElementById("max-articles").value
 
-    const baseURL = "http://localhost:5000/query/"
+    const baseURL = "http://lit.biodat.io/api/"
     let queryURL = `${baseURL}?genes=${genes}&max_articles=${maxArticles}`
 
     if (pvalues.length > 0) {
