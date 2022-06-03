@@ -94,10 +94,15 @@ if not os.path.exists("/data/gene-search/"):
     os.makedirs("/data/gene-search/", mode=0o755)
 
 @app.post("/api/")
-async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str] = None, 
+async def query(genes: str, keyType: str, pvalues: Optional[str] = None, 
+                disease: Optional[str] = None, 
                 max_articles: Optional[int] = 100):
     # split list of genes
-    target_symbols = genes.split(",")
+    input_genes = genes.split(",")
+
+    # validate key type
+    if keyType not in ['symbol', 'ensgene']:
+        return ({"error": "Invalid keyType specified!"})
 
     # validate disease MeSH term, if specified
     if disease is not None:
@@ -106,7 +111,7 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
 
     # validate p-value input length, if specified
     if pvalues is not None:
-        if len(pvalues.split(",")) != len(target_symbols):
+        if len(pvalues.split(",")) != len(input_genes):
             return({"error": "Gene symbol and P-value inputs have different lengths!"})
 
     # if disease specified, limit to articles pertaining to that disease
@@ -116,7 +121,7 @@ async def query(genes: str, pvalues: Optional[str] = None, disease: Optional[str
         pmids_allowed = mesh_pmids[disease]
 
     # get binary <pmid x gene> matrix
-    pmid_symbol_comat = get_pmid_symbol_comat(target_symbols, gene_mapping,
+    pmid_symbol_comat = get_pmid_symbol_comat(input_genes, gene_mapping,
                                               entrez_pmids, pmids_allowed)
 
     # devel: store pmid x gene mat..

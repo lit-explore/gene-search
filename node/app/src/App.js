@@ -36,6 +36,8 @@ function App() {
     const geneInput = document.getElementById("input-genes").value 
     const genes = geneInput.trim().replace(/[,\n]/g, ",")
 
+    const keyType = document.getElementById("gene-id-type").value 
+
     const pvalInput = document.getElementById("input-pvalues").value 
     const pvalues = pvalInput.trim().replace(/[,\n]/g, ",")
     
@@ -44,7 +46,7 @@ function App() {
     const maxArticles = document.getElementById("max-articles").value
 
     const baseURL = "http://lit.biodat.io/api/"
-    let queryURL = `${baseURL}?genes=${genes}&max_articles=${maxArticles}`
+    let queryURL = `${baseURL}?genes=${genes}&keytype=${keyType}&max_articles=${maxArticles}`
 
     if (pvalues.length > 0) {
       queryURL = queryURL + `&pvalues=${pvalues}`
@@ -85,11 +87,15 @@ function App() {
       <Row>
         <Col xs={3}> 
           <Form onSubmit={handleSubmit}>
-            <Form.Label>Gene Symbols</Form.Label>
-            <Form.Control id="input-genes" as="textarea" placeholder="Gene Symbols" style={{ height: '100px' }} />
+            <Form.Label>Gene IDs</Form.Label>
+            <Form.Control id="input-genes" as="textarea" placeholder="Gene IDs" style={{ height: '100px' }} />
             <Form.Text className="text-muted">
-              Comma- or newline-separated gene symbols.
+              Comma- or newline-separated gene IDs or symbols.
             </Form.Text>
+            <Form.Select id="gene-id-type">
+              <option value='symbol'>Gene Symbols</option>
+              <option value='ensgene'>Ensembl Gene IDs</option>
+            </Form.Select>
             <Form.Label>Gene P-values (Optional)</Form.Label>
             <Form.Control id="input-pvalues" as="textarea" placeholder="Gene P-values" style={{ height: '100px' }} />
             <Form.Text className="text-muted">
