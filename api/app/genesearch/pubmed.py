@@ -9,15 +9,18 @@ import json
 import sys
 import urllib.request
 
-def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame, 
-                          pubtator_entrez_pmids:dict, pmids_allowed: Optional[List[str]] = None) -> pd.DataFrame:
+def build_article_gene_comat(entrez_ids:List[str], 
+                             article_mapping:dict, 
+                             pmids_allowed: Optional[List[str]] = None) -> pd.DataFrame:
     """
     Generates an <article x gene> matrix for genes of interest
 
     Arguments
     ---------
-    target_symbols: list[str]
-        List of gene target gene symbols
+    entrez_ids: list[str]
+        List of target entrez gene ids
+    article_mapping: dict
+        Dictionary mapping from entrez gene ids to pubmed article ids
     pmids_allowed: list[str]
         Optional list of PMIDs to restrict result to
 
@@ -28,41 +31,14 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
     """
     # setup logger
     logging.basicConfig(stream=sys.stdout, 
-                        format='%(asctime) [%(levelname)s] %(message)s', 
+                        format='%(asctime)s [%(levelname)s] %(message)s', 
                         level=logging.INFO)
     logger = logging.getLogger('gene-search')
-
-    # convert gene list to a pandas series
-    target_genes = pd.Series(target_symbols)
-
-    # exclude any genes that either can't be mapped to entrez ids
-    mask = target_genes.isin(gene_mapping.index)
-    target_genes = target_genes[mask]
-
-    # convert gene symbols to entrez ids
-    target_entrez = gene_mapping.loc[target_genes].entrezgene.values
-    target_entrez = pd.Series([str(x) for x in target_entrez])
-
-    # exclude any genes that aren't present in the pubtator data
-    #mask = pd.Series([x in pubtator_entrez_pmids.keys() for x in target_entrez])
-    mask = target_entrez.isin(pubtator_entrez_pmids.keys())
-
-    #  target_entrez = pd.Series(target_entrez)[mask].values
-    valid_entrez_ids = target_entrez[mask].values
-
-    target_genes = target_genes[mask.values]
-
-    # get subset of gene/article mapping for genes of interest
-    entrez_pmids_subset = {}
-
-    for entrez_id in valid_entrez_ids:
-        entrez_pmids_subset[entrez_id] = pubtator_entrez_pmids[entrez_id]
-        entrez_pmids_subset[entrez_id]
 
     # get a list of all unique pubmed article ids associated with >= 1 gene of interest
     # TODO (May 21, 2022): add optional step here to limit result to articles associated
     # with >= N genes?
-    pmid_lists = [entrez_pmids_subset[entrez_id] for entrez_id in entrez_pmids_subset]
+    pmid_lists = [article_mapping[entrez_id] for entrez_id in article_mapping]
     matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
 
     num_matches = len(matching_pmids)
@@ -76,24 +52,21 @@ def get_pmid_symbol_comat(target_symbols:List[str], gene_mapping:pd.DataFrame,
 
         logger.info(f"Excluding {num_before - num_after}/{num_before} articles not included in allowed PMIDs.")
 
-    # convert to a binary <pmid x gene> co-occurrence matrix
-    pmid_symbol_rows = []
+    # iterate over genes and create binary vectors corresponding to
+    # their presence/absence in each article
+    rows = []
 
-    for i, gene in enumerate(valid_entrez_ids):
-        row = matching_pmids.isin(entrez_pmids_subset[gene]).astype(np.int64)
-        pmid_symbol_rows.append(row)
+    for i, gene in enumerate(entrez_ids):
+        row = matching_pmids.isin(article_mapping[gene]).astype(np.int64)
+        rows.append(row)
 
-    pmid_symbol_mat = pd.concat(pmid_symbol_rows, axis=1)
+    article_gene_mat = pd.concat(rows, axis=1)
+    article_gene_mat.columns = entrez_ids 
+    article_gene_mat.index = matching_pmids
 
-    # convert boolean to numeric (0|1)
-    #  pmid_symbol_mat.replace({False: 0, True: 1}, inplace=True)
+    return article_gene_mat
 
-    pmid_symbol_mat.columns = target_genes
-    pmid_symbol_mat.index = matching_pmids
-
-    return pmid_symbol_mat
-
-def query_article_info(pmids:list[str]):
+def query_article_info(pmids:list[str]) -> dict:
     """
     Uses PubMed API to retrieve additional information for each article hit
 

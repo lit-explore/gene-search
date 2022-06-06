@@ -1,10 +1,17 @@
 import numpy as np
 import pandas as pd
 
-def build_network(pmid_symbol_comat:pd.DataFrame) -> dict:
-    """constructs a simple network based on the similarity of article genes mentions"""
+def build_network(comat:pd.DataFrame) -> dict:
+    """
+    Constructs a simple network based on the similarity of article genes mentions
+
+    Arguments
+    ---------
+    comat: pd.DataFrame
+        article x gene co-occurrence matrix
+    """
     # measure pairwise article correlation
-    cor_df = pmid_symbol_comat.T.corr()
+    cor_df = comat.T.corr()
 
     cor_mat = cor_df.to_numpy()
     np.fill_diagonal(cor_mat, 0)
@@ -15,7 +22,7 @@ def build_network(pmid_symbol_comat:pd.DataFrame) -> dict:
 
     ind = np.where(cor_mat > 0)
 
-    pmids = pmid_symbol_comat.index.tolist()
+    pmids = comat.index.tolist()
 
     indFrom = ind[0].tolist()
     indTo = ind[1].tolist()
@@ -27,7 +34,7 @@ def build_network(pmid_symbol_comat:pd.DataFrame) -> dict:
         article2 = pmids[indTo[i]]
 
         # number of genes shared by articles
-        num_shared = (pmid_symbol_comat.loc[article1] & pmid_symbol_comat.loc[article1]).sum()
+        num_shared = (comat.loc[article1] & comat.loc[article1]).sum()
 
         edges.append(
             {

@@ -25,15 +25,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
 
-from genesearch.pubmed import query_article_info, get_pmid_symbol_comat
+from genesearch.pubmed import query_article_info, build_article_gene_comat 
 from genesearch.clustering import cluster_articles
 from genesearch.network import build_network
 
 app = FastAPI()
-#app = FastAPI(root_path="/api")
 
 # setup logger
-logging.basicConfig(stream=sys.stdout, format='%(asctime) [%(levelname)s] %(message)s', 
+logging.basicConfig(stream=sys.stdout, format='%(asctime)s [%(levelname)s] %(message)s', 
                     level=logging.INFO)
 logger = logging.getLogger('gene-search')
 
@@ -62,11 +61,12 @@ MIN_PVAL = 1e-100
 #  A1BG               1
 #  A1BG-AS1      503538
 #  A1CF           29974
-gene_mapping_infile = "data/symbol_entrez.tsv"
+symbol_entrez_mapping = pd.read_csv("data/symbol_entrez.tsv", 
+                                    sep='\t').set_index('symbol')
 
-with open(gene_mapping_infile) as fp:
-    gene_mapping = pd.read_csv(gene_mapping_infile, sep='\t').set_index('symbol')
-
+# load ensembl gene id -> entrez id mapping (created: june 02, 2022)
+ensgene_entrez_mapping = pd.read_csv("data/ensgene_entrez.tsv", 
+                                     sep='\t').set_index('ensgene')
 
 # load disease mesh term -> pmid mapping
 # n ~ 11,000 MeSH terms
@@ -81,7 +81,7 @@ with open(disease_pmid_infile) as fp:
 entrez_pmid_infile = "/data/pmids/gene-pmids.json"
 
 with open(entrez_pmid_infile) as fp:
-    entrez_pmids = json.loads(fp.read())
+    entrez_article_mapping = json.loads(fp.read())
 
 # load pmid -> unique gene counts
 # number of unique gene mentions for each pubmed article
@@ -109,10 +109,29 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
         if disease not in mesh_pmids.keys():
             return({"error": "Unable to find specified disease MeSH ID"})
 
-    # validate p-value input length, if specified
-    if pvalues is not None:
-        if len(pvalues.split(",")) != len(input_genes):
+    # validate p-value input length, and create series for easier masking later on
+    if pvalues is None:
+        input_pvalues = [None for i in range(len(input_genes))]
+    else:
+        input_pvalues = pvalues.split(",")
+
+        if len(input_pvalues) != len(input_genes):
             return({"error": "Gene symbol and P-value inputs have different lengths!"})
+
+        # convert pvalues to numeric
+        input_pvalues = [np.float64(pval) for pval in input_pvalues]
+
+    # combine input genes and p-values into a single dataframe, in order to make them
+    # easier to transform together;
+    # if no p-values specified, a column of all missing values will be used as a
+    # placeholder
+    query_df = pd.DataFrame({
+        "gene": input_genes,
+        "pvalue": input_pvalues
+    })
+
+    # create a dict mapping from gene symbol -> p-value
+    #pvalues_series = pd.Series([np.float64(pval) for pval in pvalues.split(",")])
 
     # if disease specified, limit to articles pertaining to that disease
     pmids_allowed = None
@@ -120,36 +139,73 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
     if disease is not None:
         pmids_allowed = mesh_pmids[disease]
 
-    # get binary <pmid x gene> matrix
-    pmid_symbol_comat = get_pmid_symbol_comat(input_genes, gene_mapping,
-                                              entrez_pmids, pmids_allowed)
+    # if ensembl gene ids or symbols provided, convert to entrez ids
+    if keyType in ['ensgene', 'symbol']:
+        # determine gene mapping to use
+        if keyType == 'ensgene':
+            gene_mapping = ensgene_entrez_mapping
+        else:
+            gene_mapping = symbol_entrez_mapping
+
+        # exclude any genes that can't be mapped to entrez ids
+        mask = query_df.gene.isin(gene_mapping.index)
+        query_df = query_df[mask]
+
+        # add entrez ids column
+        entrez_ids = [str(x) for x in gene_mapping.loc[query_df.gene].entrezgene.values]
+        query_df.insert(0, "entrezgene", entrez_ids)
+    else:
+        query_df.insert(0, "entrezgene", input_genes)
+    
+    # exclude any genes that aren't present in the pubtator data
+    valid_entrez_ids = entrez_article_mapping.keys()
+
+    mask = query_df.entrezgene.isin(valid_entrez_ids)
+    query_df = query_df[mask]
+
+    # to speed things up, get subset of gene/article mapping dict for genes of interest
+    entrez_article_mapping_subset = {}
+
+    entrez_ids = query_df.entrezgene.values
+
+    for entrez_id in entrez_ids:
+        entrez_article_mapping_subset[entrez_id] = entrez_article_mapping[entrez_id]
+        entrez_article_mapping_subset[entrez_id]
+
+    # get binary <article x gene> matrix
+    comat = build_article_gene_comat(entrez_ids, entrez_article_mapping_subset, 
+                                     pmids_allowed)
 
     # devel: store pmid x gene mat..
-    now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    pmid_symbol_comat.reset_index().rename(columns={"index": "pmid"}).to_feather(f"/data/gene-search/{now}.feather")
+    #  now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    #  comat.reset_index().rename(columns={"index": "pmid"}).to_feather(f"/data/gene-search/{now}.feather")
 
-    # get number of genes matched in each article
-    num_matched = pmid_symbol_comat.sum(axis=1)
+    # get number of _target_ genes matched in each article
+    num_matched = comat.sum(axis=1)
 
-    # get the _total_ number of genes associated with each article
-    pmid_gene_counts = gene_counts.loc[num_matched.index].num
+    # get the _total_ number of unique genes associated with each article
+    article_total_genes = gene_counts.loc[num_matched.index].num
 
     # ratio of matched genes to total genes
-    ratio_matched = num_matched / pmid_gene_counts
+    ratio_matched = num_matched / article_total_genes
 
     # if p-values were provided, weight gene contributions by -log10 (p-values)
     if pvalues is not None:
-        dat_weighted = pmid_symbol_comat.copy()
+        dat_weighted = comat.copy()
 
         # create a dict mapping from gene symbol -> p-value
-        target_pvals = {}
+        #  target_pvals = {}
+        #
+        #  for i, pval in enumerate(query_df.pvalue.values):
+        #      target_pvals[target_symbols[i]] = np.float64(pval)
 
-        for i, pval in enumerate(pvalues.split(",")):
-            target_pvals[target_symbols[i]] = np.float64(pval)
+        # sanity check..
+        if not np.all(query_df.entrezgene == comat.columns):
+            raise Exception("ID mismatch during weighted co-mat generation!")
 
         # multiply columns of co-ocurrence matrix by p-value based weights
-        for i, symbol in enumerate(dat_weighted.columns):
-            dat_weighted.iloc[:, i] *= -np.log10(np.max([MIN_PVAL, target_pvals[symbol]]))
+        for i, gene in query_df.iterrows():
+            dat_weighted.iloc[:, i] *= -np.log10(np.max([MIN_PVAL, gene.pvalue]))
 
         # rescale to [0, max(num_matched)]
         max_matches = num_matched.max().max()
@@ -174,30 +230,32 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
 
     # get subset of article x gene matrix corresponding to the top N hits and cluster
     # articles based on similarity in the genes mentioned..
-    pmid_symbol_comat_top = pmid_symbol_comat[pmid_symbol_comat.index.isin(article_scores.index)]
+    comat = comat[comat.index.isin(article_scores.index)]
 
     # drop genes which are not present in any articles, after filtering..
-    mask = pmid_symbol_comat_top.sum() > 0
+    mask = comat.sum() > 0
 
-    dropped_genes = ", ".join(sorted(pmid_symbol_comat_top.columns[~mask]))
+    if (~mask).sum() > 0:
+        dropped_genes = ", ".join(sorted(comat.columns[~mask]))
 
-    logger.info(
-        f"Dropping genes that don't appear in any of the top-scoring articles: {dropped_genes}"
-    )
-    pmid_symbol_comat_top = pmid_symbol_comat_top.loc[:, mask]
+        logger.info(
+            f"Dropping genes that don't appear in any of the top-scoring articles: {dropped_genes}"
+        )
+        comat = comat.loc[:, mask]
+    else:
+        dropped_genes = ""
 
-    logger.info(f"Clustering {pmid_symbol_comat_top.shape[0]} articles...")
-    clusters = cluster_articles(pmid_symbol_comat_top)
+    logger.info(f"Clustering {comat.shape[0]} articles...")
+    clusters = cluster_articles(comat)
 
     # generate network
     logger.info("Building article network..")
-    net = build_network(pmid_symbol_comat_top)
+    net = build_network(comat)
 
     # query pubmed api for article info
-    citations = query_article_info(list(pmid_symbol_comat_top.index))
+    citations = query_article_info(list(comat.index))
 
     # cluster color map
-    # todo: add check & interpolate colors if more are needed..
     cmap = [
         "#aef980",
         "#4ff0b9",
@@ -216,15 +274,26 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
 
     logger.info("Finalizing results...")
 
+    # swap indices in gene id mapping to make it easier to convert back to the original
+    # key type
+    gene_mapping = gene_mapping.reset_index().set_index('entrezgene')
+
     for clust in set(clusters.values()):
         # get pmids associated with cluster
         clust_dict = dict(filter(lambda x: x[1] == clust, clusters.items()))
         clust_pmids = clust_dict.keys()
 
         # get submat associated with cluster, and count genes
-        clust_submat = pmid_symbol_comat_top[pmid_symbol_comat_top.index.isin(clust_pmids)]
+        clust_comat = comat[comat.index.isin(clust_pmids)]
 
-        clust_counts = clust_submat.sum()
+        # get within-cluster target gene counts
+        clust_counts = clust_comat.sum()
+
+        # if original query used gene symbols / ensgenes, convert back
+        if keyType in ['ensgene', 'symbol']:
+            orig_ids = gene_mapping.loc[clust_counts.index.astype('int')][keyType].values
+            clust_counts.index = orig_ids
+
         count_dict = clust_counts.sort_values(ascending=False).to_dict(into=OrderedDict)
 
         clust_info[clust] = {
@@ -235,21 +304,25 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
 
     scores_dict = article_scores.to_dict()
 
-    dat_subset_sums = num_matched.loc[pmid_symbol_comat_top.index]
+    dat_subset_sums = num_matched.loc[comat.index]
 
     # generate result json, including gene ids, etc. for each article
     articles = []
 
-    for pmid, num_genes in dat_subset_sums.items():
+    for pmid, num_genes_matched in dat_subset_sums.items():
 
         # retrieve the associated gene names
-        pmid_genes = list(pmid_symbol_comat_top.loc[pmid][pmid_symbol_comat_top.loc[pmid] == 1].index)
+        pmid_genes = list(comat.loc[pmid][comat.loc[pmid] == 1].index)
+
+        # convert back to original key type, if needed
+        if keyType in ['ensgene', 'symbol']:
+            pmid_genes = gene_mapping.loc[[int(x) for x in pmid_genes]][keyType].values
 
         articles.append(
             {
                 "id": pmid,
                 "genes": ", ".join(pmid_genes),
-                "num_matched": num_genes,
+                "num_matched": num_genes_matched,
                 "num_total": gene_counts.loc[pmid].num.item(),
                 "score": scores_dict[pmid],
                 "citation": citations[pmid],
@@ -264,14 +337,16 @@ async def query(genes: str, keyType: str, pvalues: Optional[str] = None,
 
     info = {"not_present_in_top_articles": dropped_genes}
 
-    query_dict = {"genes": target_symbols}
+    query_dict = {"genes": input_genes}
 
     if pvalues is not None:
-        query_dict["pvalues"] = [np.float64(pval) for pval in pvalues.split(",")]
+        query_dict["pvalues"] = input_pvalues 
 
     res = {"query": query_dict, "clusters": clust_info, "network": net, "info": info}
 
     # testing..
+    now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
     with open(f"/data/gene-search/{now}.json", "w") as fp:
         json.dump(res, fp)
 

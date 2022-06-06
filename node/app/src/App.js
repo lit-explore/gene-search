@@ -46,7 +46,7 @@ function App() {
     const maxArticles = document.getElementById("max-articles").value
 
     const baseURL = "http://lit.biodat.io/api/"
-    let queryURL = `${baseURL}?genes=${genes}&keytype=${keyType}&max_articles=${maxArticles}`
+    let queryURL = `${baseURL}?genes=${genes}&keyType=${keyType}&max_articles=${maxArticles}`
 
     if (pvalues.length > 0) {
       queryURL = queryURL + `&pvalues=${pvalues}`
@@ -72,7 +72,7 @@ function App() {
         entry.label = entry.citation + "<br /><b>" + entry.genes + "</b>"
       })
     }).catch(function (error) {
-      console.log("[Error] Error encountered!");
+      console.log("[Error] Error encountered! See HTTP response in inspector for more info.");
       console.log(error);
     });
 

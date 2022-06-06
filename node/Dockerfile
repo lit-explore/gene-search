@@ -5,9 +5,6 @@ MAINTAINER keith.hughitt@gmail.com
 RUN mkdir -p /home/node/app
 WORKDIR /home/node/app
 
-# aliases
-RUN echo 'alias l="ls -lah"' >> ~/.bashrc
-
 # work-around (node v17 x webpack issues)
 # https://github.com/webpack/webpack/issues/14532
 ENV NODE_OPTIONS="--openssl-legacy-provider"
