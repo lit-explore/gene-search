@@ -34,7 +34,7 @@ function App() {
   function handleSubmit(event) {
     // construct query URL
     const geneInput = document.getElementById("input-genes").value 
-    const genes = geneInput.trim().replace(/[,\n]/g, ",")
+    const genes = geneInput.trim().replace(/['"]/g, "").replace(/[,\n]/g, ",")
 
     const keyType = document.getElementById("gene-id-type").value 
 
@@ -45,8 +45,10 @@ function App() {
 
     const maxArticles = document.getElementById("max-articles").value
 
-    const baseURL = "http://lit.biodat.io/api/"
-    let queryURL = `${baseURL}?genes=${genes}&keyType=${keyType}&max_articles=${maxArticles}`
+    // const baseURL = "http://lit.biodat.io/api/"
+    const baseURL = "http://localhost:5000/api/"
+
+    let queryURL = `${baseURL}?genes=${genes}&key_type=${keyType}&max_articles=${maxArticles}`
 
     if (pvalues.length > 0) {
       queryURL = queryURL + `&pvalues=${pvalues}`
