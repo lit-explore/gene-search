@@ -46,7 +46,8 @@ function App() {
     const maxArticles = document.getElementById("max-articles").value
 
     // const baseURL = "http://lit.biodat.io/api/"
-    const baseURL = "http://localhost:5000/api/"
+    // const baseURL = "http://localhost:5000/api/"
+    const baseURL = process.env.REACT_APP_GENE_SEARCH_BASE_URI + "/api";
 
     let queryURL = `${baseURL}?genes=${genes}&key_type=${keyType}&max_articles=${maxArticles}`
 

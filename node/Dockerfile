@@ -1,6 +1,6 @@
 FROM node:latest
 
-MAINTAINER keith.hughitt@gmail.com
+MAINTAINER keith.hughitt@nih.gov
 
 RUN mkdir -p /home/node/app
 WORKDIR /home/node/app

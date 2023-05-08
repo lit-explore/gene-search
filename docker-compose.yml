@@ -8,15 +8,18 @@ services:
     command: sh -c "gunicorn main:app --timeout 6000 --bind 0.0.0.0:5000 -w 1 -k uvicorn.workers.UvicornWorker"
     environment:
       - "PYTHONUNBUFFERED=1"
+      - "GENE_SEARCH_BASE_URI"
     ports:
       - "5000:5000"
     volumes:
-      - "/data/proj/pubtator/2022-05-23/:/data"
+      - "/data/proj/lit-explore/pubtator/2022-12-17/:/data"
   node:
     build:
       context: node/
       dockerfile: Dockerfile
     command: "yarn start"
+    environment:
+      - "REACT_APP_GENE_SEARCH_BASE_URI=${GENE_SEARCH_BASE_URI}"
     user: "node"
     working_dir: /home/node/app
     ports:

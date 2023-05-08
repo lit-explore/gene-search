@@ -8,7 +8,7 @@ import os
 import sys
 import logging
 from collections import OrderedDict
-from typing import Optional
+from typing import Any, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
@@ -57,42 +57,49 @@ CMAP = [
 ]
 
 
-# load gene symbol -> entrez id mapping (created: march 23, 2022)
-# n = 43,491 gene symbols
-#            entrezgene
-#  symbol
-#  A1BG               1
-#  A1BG-AS1      503538
-#  A1CF           29974
-symbol_entrez_mapping = pd.read_csv("data/symbol_entrez.tsv",
-                                    sep='\t').set_index('symbol')
+# load gene id mappings
+symbol_entrez_mapping = pd.read_feather("/data/ids/human/symbol2entrez.feather").set_index("symbol")
+ensgene_entrez_mapping = pd.read_feather("/data/ids/human/ensgene2entrez.feather").set_index("ensgene")
 
-# load ensembl gene id -> entrez id mapping (created: june 02, 2022)
-ensgene_entrez_mapping = pd.read_csv("data/ensgene_entrez.tsv",
-                                     sep='\t').set_index('ensgene')
+symbol_entrez_mapping.entrezgene = symbol_entrez_mapping.entrezgene.astype(int)
+ensgene_entrez_mapping.entrezgene = ensgene_entrez_mapping.entrezgene.astype(int)
 
-# load disease mesh term -> pmid mapping
+# too slow to do on the fly..
+# disease_pmids = defaultdict(list)
+# df = pd.read_feather("/data/filtered/disease.feather")
+#  for _, row in df.iterrows():
+#      disease_pmids[row.concept_id].append(row.pmid)
+#  entrez_pmids = defaultdict(list)
+#  df = pd.read_feather("/data/filtered/gene.feather")
+#  for _, row in df.iterrows():
+#      entrez_pmids[row.concept_id].append(row.pmid)
+
+# database/sqlite might be a good alternative to loading large JSON files?
+
+# create disease MeSH term -> PMID mapping
 # n ~ 11,000 MeSH terms
-with open("/data/pmids/disease-pmids.json", "rt", encoding="utf-8") as fp:
+with open("/data/json/disease_pmids.json", "rt", encoding="utf-8") as fp:
     mesh_pmids = json.loads(fp.read())
 
-# load entrez id -> pmid mapping
-# generated from pubtator data
+# create entrez id -> PMID mapping
 # n ~ 26,300 entrez ids
-with open("/data/pmids/gene-pmids.json", "rt", encoding="utf-8") as fp:
-    entrez_article_mapping = json.loads(fp.read())
+with open("/data/json/human_entrez_pmids.json", "rt", encoding="utf-8") as fp:
+    entrez_pmids = json.loads(fp.read())
+
+# convert entrez dict indices to ints to be consistent
+entrez_pmids = {int(k):v for k, v in entrez_pmids.items()}
 
 # load pmid -> unique gene counts
 # number of unique gene mentions for each pubmed article
 # n ~ 4.35m pubmed ids
-gene_counts = pd.read_feather("/data/gene-counts/pmid_gene_counts.feather").set_index("pmid")
+gene_counts = pd.read_feather("/data/counts/unique_genes.feather").set_index("pmid")
 
 # create output dir, if it doesn't already exist
 if not os.path.exists("/data/gene-search/"):
     os.makedirs("/data/gene-search/", mode=0o755)
 
 def create_cluster_info(clusters:dict, comat:pd.DataFrame, key_type:str, 
-                        gene_mapping:pd.DataFrame|None):
+                        gene_mapping:pd.DataFrame|None) -> dict[str, Any]:
     """
     Creates cluster info section of result
     """
@@ -112,7 +119,7 @@ def create_cluster_info(clusters:dict, comat:pd.DataFrame, key_type:str,
 
         # if original query used gene symbols / ensgenes, convert back
         if gene_mapping is not None:
-            ind = clust_counts.index.astype('int')
+            ind = clust_counts.index.astype(int)
             clust_counts.index = gene_mapping.loc[ind][key_type].values
 
         count_dict = clust_counts.sort_values(ascending=False).to_dict(into=OrderedDict)
@@ -122,6 +129,8 @@ def create_cluster_info(clusters:dict, comat:pd.DataFrame, key_type:str,
             "genes": count_dict,
             "num_articles": len(clust_pmids),
         }
+
+    return clust_info
 
 @app.post("/api/")
 async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
@@ -188,13 +197,14 @@ async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
         input_df = input_df[mask]
 
         # add entrez ids column
-        entrez_ids = [str(x) for x in gene_mapping.loc[input_df.gene].entrezgene.values]
+        #  entrez_ids = [str(x) for x in gene_mapping.loc[input_df.gene].entrezgene.values]
+        entrez_ids = gene_mapping.loc[input_df.gene].entrezgene.values
         input_df.insert(0, "entrezgene", entrez_ids)
     else:
         input_df.insert(0, "entrezgene", input_genes)
 
     # exclude any genes that aren't present in the pubtator data
-    valid_entrez_ids = entrez_article_mapping.keys()
+    valid_entrez_ids = [int(x) for x in entrez_pmids.keys()]
 
     mask = input_df.entrezgene.isin(valid_entrez_ids)
     input_df = input_df[mask]
@@ -205,7 +215,7 @@ async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
     entrez_ids = input_df.entrezgene.values
 
     for entrez_id in entrez_ids:
-        entrez_article_mapping_subset[entrez_id] = entrez_article_mapping[entrez_id]
+        entrez_article_mapping_subset[entrez_id] = entrez_pmids[entrez_id]
         entrez_article_mapping_subset[entrez_id]
 
     # get binary <article x gene> matrix
@@ -221,7 +231,7 @@ async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
     num_matched = comat.sum(axis=1)
 
     # get the _total_ number of unique genes associated with each article
-    article_total_genes = gene_counts.loc[num_matched.index].num
+    article_total_genes = gene_counts.loc[num_matched.index].n
 
     # ratio of matched genes to total genes
     ratio_matched = num_matched / article_total_genes
@@ -273,7 +283,7 @@ async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
     mask = comat.sum() > 0
 
     if (~mask).sum() > 0:
-        dropped_genes = ", ".join(sorted(comat.columns[~mask]))
+        dropped_genes = ", ".join([str(x) for x in sorted(comat.columns[~mask])])
 
         logger.info(
             f"Dropping genes that don't appear in any of the top-scoring articles: {dropped_genes}"
@@ -323,7 +333,7 @@ async def query(genes: str, key_type: str, pvalues: Optional[str] = None,
                 "id": pmid,
                 "genes": ", ".join(pmid_genes),
                 "num_matched": num_genes_matched,
-                "num_total": gene_counts.loc[pmid].num.item(),
+                "num_total": gene_counts.loc[pmid].n.item(),
                 "score": scores_dict[pmid],
                 "citation": citations[pmid],
                 "cluster": clusters[pmid],

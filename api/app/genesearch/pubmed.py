@@ -9,15 +9,15 @@ import json
 import sys
 import urllib.request
 
-def build_article_gene_comat(entrez_ids:List[str], 
-                             article_mapping:dict, 
+def build_article_gene_comat(entrez_ids:List[int],
+                             article_mapping:dict,
                              pmids_allowed: Optional[List[str]] = None) -> pd.DataFrame:
     """
     Generates an <article x gene> matrix for genes of interest
 
     Arguments
     ---------
-    entrez_ids: list[str]
+    entrez_ids: list[int]
         List of target entrez gene ids
     article_mapping: dict
         Dictionary mapping from entrez gene ids to pubmed article ids
@@ -30,8 +30,8 @@ def build_article_gene_comat(entrez_ids:List[str],
         Gene x Pubmed article co-occurrence matrix as a pandas dataframe
     """
     # setup logger
-    logging.basicConfig(stream=sys.stdout, 
-                        format='%(asctime)s [%(levelname)s] %(message)s', 
+    logging.basicConfig(stream=sys.stdout,
+                        format='%(asctime)s [%(levelname)s] %(message)s',
                         level=logging.INFO)
     logger = logging.getLogger('gene-search')
 
@@ -42,7 +42,7 @@ def build_article_gene_comat(entrez_ids:List[str],
     matching_pmids = pd.Series(sorted(set(sum(pmid_lists, []))))
 
     num_matches = len(matching_pmids)
-    logger.info(f"Found {num_matches} articles with one or more of the genes of interest..")
+    logger.info("Found %d articles with one or more of the genes of interest..", num_matches)
 
     # if disease specified, filter to include only articles relating to that disease
     if pmids_allowed is not None:
@@ -50,19 +50,20 @@ def build_article_gene_comat(entrez_ids:List[str],
         matching_pmids = matching_pmids[matching_pmids.isin(pmids_allowed)]
         num_after = len(matching_pmids)
 
-        logger.info(f"Excluding {num_before - num_after}/{num_before} articles not included in allowed PMIDs.")
+        logger.info("Excluding %d/%d articles not included in allowed PMIDs.",
+                    num_before - num_after, num_before)
 
     # iterate over genes and create binary vectors corresponding to
     # their presence/absence in each article
     rows = []
 
-    for i, gene in enumerate(entrez_ids):
+    for _, gene in enumerate(entrez_ids):
         row = matching_pmids.isin(article_mapping[gene]).astype(np.int64)
         rows.append(row)
 
     article_gene_mat = pd.concat(rows, axis=1)
-    article_gene_mat.columns = entrez_ids 
-    article_gene_mat.index = matching_pmids
+    article_gene_mat.columns = pd.Index(entrez_ids)
+    article_gene_mat.index = pd.Index(matching_pmids)
 
     return article_gene_mat
 
@@ -95,7 +96,7 @@ def query_article_info(pmids:list[str]) -> dict:
     pmid_chunks = list(chunks(pmids, 50))
 
     for i, chunk in enumerate(pmid_chunks):
-        logger.info(f"Querying PubMed API for citation info.. ({i + 1}/{len(pmid_chunks)})")
+        logger.info("Querying PubMed API for citation info.. (%d/%d)", i + 1, len(pmid_chunks))
 
         url = base_url + ",".join([str(x) for x in chunk])
 
