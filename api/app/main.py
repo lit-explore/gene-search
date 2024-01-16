@@ -1,6 +1,6 @@
 """
 gene-search
-KH (Oct2021)
+kh
 """
 import datetime
 import json

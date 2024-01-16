@@ -10,8 +10,8 @@ WORKDIR /home/node/app
 ENV NODE_OPTIONS="--openssl-legacy-provider"
 
 ADD app/package.json ./
-ADD app/yarn.lock ./
+ADD app/package-lock.json ./
 
-RUN yarn install
+RUN npm i
 
 COPY --chown=node:node app/ /home/node/app

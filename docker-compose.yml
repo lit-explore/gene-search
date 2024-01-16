@@ -12,7 +12,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - "/data/proj/lit-explore/pubtator/2022-12-17/:/data"
+      - "/data/proj/lit-explore/pubtator/2023-11-06/:/data"
   node:
     build:
       context: node/
